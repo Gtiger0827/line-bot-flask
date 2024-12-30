@@ -98,6 +98,10 @@ def stock_fundamental(stock_id="大盤"):
 
 
 # LINE Bot Webhook 處理
+@app.route("/", methods=["GET"])
+def home():
+    return "Hello from LINE Bot!"
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get('X-Line-Signature')
