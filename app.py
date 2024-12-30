@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 import requests
 import os
 import threading
+import pandas as pd
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 # 讀取環境變數
@@ -58,7 +60,7 @@ def callback():
     return "OK", 200
 
 
-# 取得股價資料並繪圖
+# 股票價格資料
 def stock_price(stock_id="大盤", days=90):
     if stock_id == "大盤":
         stock_id = "^TWII"
@@ -71,99 +73,114 @@ def stock_price(stock_id="大盤", days=90):
     try:
         stock_data = yf.download(stock_id, start=start, end=end)
         if stock_data.empty:
-            return None
+            return {"message": "查無資料"}
 
+        stock_data['date'] = stock_data.index.strftime('%Y-%m-%d')
+
+        # 繪製股價走勢圖
         plt.figure(figsize=(10, 5))
-        plt.plot(stock_data['Close'], label='收盤價')
-        plt.title(f"{stock_id} 最近 {days} 天股價")
-        plt.xlabel("日期")
-        plt.ylabel("股價 (TWD)")
+        plt.plot(stock_data['Close'], label='Closing Price')
+        plt.title(f"{stock_id} Stock Price (Last {days} Days)")
+        plt.xlabel("Date")
+        plt.ylabel("Price (TWD)")
         plt.legend()
         plt.grid(True)
-
-        filename = f"{stock_id}_price_chart.png"
-        filepath = f"./static/{filename}"
-        plt.savefig(filepath)
+        plt.savefig(f"./static/{stock_id}_price_chart.png")
         plt.close()
-        return filepath
+
+        return stock_data[['date', 'Open', 'High', 'Low', 'Close', 'Volume']].tail(30).to_dict('list')
     except Exception as e:
-        print(f"股價資料獲取失敗: {str(e)}")
-        return None
+        return {"message": f"股價資料獲取失敗: {str(e)}"}
 
 
-# 繪製 EPS 圖表
+# 基本面資料
 def stock_fundamental(stock_id="大盤"):
     if stock_id == "大盤":
-        return None
+        return {"message": "大盤無基本面資訊"}
 
     stock_id += ".TW"
     stock = yf.Ticker(stock_id)
 
     try:
-        eps_data = np.round(stock.quarterly_financials.loc["Basic EPS"].dropna().tolist(), 2)
-        dates = [col.strftime('%Y-%m-%d') for col in stock.quarterly_financials.columns]
+        quarterly_eps = np.round(
+            stock.quarterly_financials.loc["Basic EPS"].dropna().tolist(), 2
+        )
 
+        dates = [date.strftime('%Y-%m-%d') for date in stock.quarterly_financials.columns]
+
+        # 繪製 EPS 圖
         plt.figure(figsize=(10, 5))
-        plt.bar(dates, eps_data)
-        plt.title(f"{stock_id} EPS 成長")
-        plt.xlabel("季度")
+        plt.bar(dates, quarterly_eps)
+        plt.title(f"{stock_id} EPS Analysis")
+        plt.xlabel("Quarter")
         plt.ylabel("EPS")
         plt.grid(True)
-
-        filename = f"{stock_id}_eps_chart.png"
-        filepath = f"./static/{filename}"
-        plt.savefig(filepath)
+        plt.savefig(f"./static/{stock_id}_eps_chart.png")
         plt.close()
-        return filepath
+
+        return {"EPS": quarterly_eps, "日期": dates}
     except Exception as e:
-        print(f"基本面資料獲取失敗: {str(e)}")
-        return None
+        return {"message": "基本面資料獲取失敗", "error": str(e)}
 
 
-# 爬取最新新聞
-def stock_news(stock_name="台股"):
+# 新聞爬蟲
+def stock_news(stock_name="大盤"):
+    data = []
     try:
-        response = requests.get(
-            f'https://ess.api.cnyes.com/ess/api/v1/news/keyword?q={stock_name}&limit=5'
+        stock_name = "台股" if stock_name == "大盤" else stock_name
+        json_data = requests.get(
+            f'https://ess.api.cnyes.com/ess/api/v1/news/keyword?q={stock_name}&limit=5&page=1'
         ).json()
-        news = [
-            f"{item['title']} - {dt.datetime.utcfromtimestamp(item['publishAt']).strftime('%Y-%m-%d')}"
-            for item in response['data']['items']
-        ]
-        return "\n".join(news) if news else "查無新聞"
+
+        items = json_data['data']['items']
+        for item in items:
+            title = item["title"]
+            publish_at = dt.datetime.utcfromtimestamp(item["publishAt"]).strftime('%Y-%m-%d')
+            data.append(f"{publish_at}: {title}")
     except Exception as e:
         print(f"新聞獲取失敗: {str(e)}")
-        return "查無新聞"
+
+    return data[:3] if data else [{"message": "查無新聞"}]
 
 
-# 結合新聞資料給 GPT 分析
-def stock_gpt_analysis(stock_name):
-    news_data = stock_news(stock_name)
-    messages = [
-        {"role": "system", "content": "你是一位專業的股票分析師，撰寫中文報告。"},
-        {"role": "user", "content": f"請分析 {stock_name} 的最新新聞並提供建議。\n{news_data}"}
+# 股票名稱查詢
+def stock_name():
+    response = requests.get('https://isin.twse.com.tw/isin/C_public.jsp?strMode=2')
+    url_data = BeautifulSoup(response.text, 'html.parser')
+    stock_company = url_data.find_all('tr')
+
+    data = [
+        (row.find_all('td')[0].text.split('\u3000')[0].strip(),
+         row.find_all('td')[0].text.split('\u3000')[1])
+        for row in stock_company[2:] if len(row.find_all('td')) > 4
     ]
 
+    return pd.DataFrame(data, columns=['股號', '股名'])
+
+
+name_df = stock_name()
+
+
+def get_stock_name(stock_id):
     try:
-        response = client.chat.completions.create(model="gpt-3.5-turbo", messages=messages)
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"分析報告失敗: {str(e)}"
+        return name_df.set_index('股號').loc[stock_id, '股名']
+    except KeyError:
+        return "未知股票"
 
 
 # 生成報告並發送至 LINE
 def generate_report(stock_id, user_id):
     price_chart = stock_price(stock_id)
     eps_chart = stock_fundamental(stock_id)
-    gpt_analysis = stock_gpt_analysis(stock_id)
+    news_data = stock_news(stock_id)
 
-    report_text = f"{stock_id} 分析報告:\n{gpt_analysis}"
-    messages = [TextMessage(text=report_text)]
+    gpt_analysis = stock_gpt(stock_id)
 
-    for chart in [price_chart, eps_chart]:
-        if chart:
-            url = f"https://your-domain.com/static/{os.path.basename(chart)}"
-            messages.append(ImageMessage(original_content_url=url, preview_image_url=url))
+    messages = [TextMessage(text=gpt_analysis)]
+
+    for chart in [f"{stock_id}_price_chart.png", f"{stock_id}_eps_chart.png"]:
+        url = f"https://line-bot-flask.onrender.com/static/{chart}"
+        messages.append(ImageMessage(original_content_url=url, preview_image_url=url))
 
     line_bot_api.push_message(user_id, messages)
 
