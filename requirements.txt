@@ -1,3 +1,10 @@
 flask
-requests
+line-bot-sdk
+yfinance
+beautifulsoup4
+openai
+matplotlib
 python-dotenv
+requests
+pandas
+numpy
