@@ -130,19 +130,39 @@ def handle_message(event):
 
     threading.Thread(target=generate_report, args=(user_message, user_id)).start()
 
-
 def generate_report(stock_id, user_id):
-    price_chart = stock_price(stock_id)
-    eps_chart = stock_fundamental(stock_id)
+    print(f"生成報告中，股票代號: {stock_id}")
 
+    # 生成股價圖表
+    price_chart = stock_price(stock_id)
+    if price_chart:
+        print(f"{stock_id} 股價圖生成成功: {price_chart}")
+    else:
+        print(f"{stock_id} 股價圖生成失敗或查無資料")
+
+    # 生成基本面圖表
+    eps_chart = stock_fundamental(stock_id)
+    if eps_chart:
+        print(f"{stock_id} 基本面圖生成成功: {eps_chart}")
+    else:
+        print(f"{stock_id} 基本面圖生成失敗或查無資料")
+
+    # 回傳文字訊息
     messages = [TextMessage(text=f"{stock_id} 分析報告已生成")]
 
+    # 回傳圖表圖片
     for chart in [price_chart, eps_chart]:
         if chart:
-            url = f"https://your-domain.com/static/{os.path.basename(chart)}"
+            url = f"https://line-bot-flask-oha5.onrender.com/static/{os.path.basename(chart)}"
+            print(f"準備回傳圖片網址: {url}")
             messages.append(ImageMessage(original_content_url=url, preview_image_url=url))
 
-    line_bot_api.push_message(user_id, messages)
+    # 推送訊息到 Line
+    try:
+        res = line_bot_api.push_message(user_id, messages)
+        print("訊息推送成功: ", res)
+    except Exception as e:
+        print(f"推送訊息失敗: {str(e)}")
 
 
 if __name__ == "__main__":
