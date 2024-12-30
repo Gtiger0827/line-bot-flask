@@ -1,5 +1,3 @@
-!pip install flask line-bot-sdk yfinance beautifulsoup4 openai matplotlib pandas python-dotenv
-
 import openai
 import yfinance as yf
 import numpy as np
