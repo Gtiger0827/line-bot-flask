@@ -145,10 +145,14 @@ def stock_gpt_analysis(stock_id):
     except Exception as e:
         print(f"生成分析報告失敗: {str(e)}")
         return "生成分析報告失敗，請稍後再試。"
+
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get('X-Line-Signature')
     body = request.get_data(as_text=True)
+    
+    print(f"Received signature: {signature}")
+    print(f"Request body: {body}")
 
     if not signature or not body:
         abort(400, "Missing signature or body")
@@ -156,13 +160,13 @@ def callback():
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
+        print("InvalidSignatureError: Signature did not match")
         abort(400, "Invalid signature")
     except Exception as e:
         print(f"Webhook Error: {str(e)}")
         abort(500, description=f"Internal Server Error: {str(e)}")
 
     return "OK", 200
-
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
