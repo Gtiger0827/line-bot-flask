@@ -32,8 +32,11 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 os.makedirs("static", exist_ok=True)
 
+@app.route("/", methods=["GET"])
+def home():
+    return "Hello from LINE Bot!"
 
-# 股票分析與圖表繪製
+# 股票價格圖表生成
 def stock_price(stock_id="大盤", days=90):
     if stock_id == "大盤":
         stock_id = "^TWII"
@@ -53,9 +56,9 @@ def stock_price(stock_id="大盤", days=90):
 
         plt.figure(figsize=(10, 5))
         plt.plot(stock_data['Close'], label='Closing Price')
-        plt.title(f"{stock_id} Stock Price (Last {days} Days)")
-        plt.xlabel("Date")
-        plt.ylabel("Price (TWD)")
+        plt.title(f"{stock_id} 股價走勢圖")
+        plt.xlabel("日期")
+        plt.ylabel("價格 (TWD)")
         plt.legend()
         plt.grid(True)
 
@@ -69,6 +72,7 @@ def stock_price(stock_id="大盤", days=90):
         return None
 
 
+# 基本面 EPS 圖表生成
 def stock_fundamental(stock_id="大盤"):
     if stock_id == "大盤":
         return None
@@ -82,8 +86,8 @@ def stock_fundamental(stock_id="大盤"):
 
         plt.figure(figsize=(10, 5))
         plt.bar(dates[:len(eps)], eps)
-        plt.title(f"{stock_id} EPS 成長")
-        plt.xlabel("Quarter")
+        plt.title(f"{stock_id} EPS 成長圖")
+        plt.xlabel("季度")
         plt.ylabel("EPS")
         plt.grid(True)
 
@@ -95,13 +99,52 @@ def stock_fundamental(stock_id="大盤"):
     except Exception as e:
         print(f"基本面資料獲取失敗: {str(e)}")
         return None
+# 新聞爬蟲
+def stock_news(stock_name="台股"):
+    data = []
+    try:
+        stock_name = "台股" if stock_name == "大盤" else stock_name
+        json_data = requests.get(
+            f'https://ess.api.cnyes.com/ess/api/v1/news/keyword?q={stock_name}&limit=5&page=1'
+        ).json()
+
+        items = json_data['data']['items']
+        for item in items:
+            title = item["title"]
+            publish_at = dt.datetime.utcfromtimestamp(item["publishAt"]).strftime('%Y-%m-%d')
+            data.append(f"{publish_at}: {title}")
+        print("新聞資料:")
+        print("\n".join(data))
+    except Exception as e:
+        print(f"新聞獲取失敗: {str(e)}")
+
+    return data[:3] if data else [{"message": "查無新聞"}]
 
 
-# LINE Bot Webhook 處理
-@app.route("/", methods=["GET"])
-def home():
-    return "Hello from LINE Bot!"
+# GPT 股票分析報告生成
+def stock_gpt_analysis(stock_id):
+    stock_name = "台股" if stock_id == "大盤" else stock_id
+    price_data = stock_price(stock_id) or "查無股價資料"
+    fund_data = stock_fundamental(stock_id) or "查無基本面資料"
+    news_data = stock_news(stock_name) or "查無新聞資料"
 
+    messages = [
+        {"role": "system", "content": "你是一位專業的股票分析師，請提供深入的分析報告，並用中文撰寫。"},
+        {"role": "user", "content": f"請分析 {stock_name} 的股價與基本面與新聞。\n股價資料:\n{price_data}\n基本面資料:\n{fund_data}\n新聞:\n{news_data}"}
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages
+        )
+        gpt_report = response.choices[0].message.content
+        print("GPT 分析報告:")
+        print(gpt_report)
+        return gpt_report
+    except Exception as e:
+        print(f"生成分析報告失敗: {str(e)}")
+        return "生成分析報告失敗，請稍後再試。"
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get('X-Line-Signature')
@@ -121,7 +164,6 @@ def callback():
     return "OK", 200
 
 
-# LINE 訊息事件處理
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_message = event.message.text.strip()
@@ -134,42 +176,21 @@ def handle_message(event):
 
     threading.Thread(target=generate_report, args=(user_message, user_id)).start()
 
+
 def generate_report(stock_id, user_id):
     print(f"生成報告中，股票代號: {stock_id}")
-
-    # 生成股價圖表
     price_chart = stock_price(stock_id)
-    if price_chart:
-        print(f"{stock_id} 股價圖生成成功: {price_chart}")
-    else:
-        print(f"{stock_id} 股價圖生成失敗或查無資料")
-
-    # 生成基本面圖表
     eps_chart = stock_fundamental(stock_id)
-    if eps_chart:
-        print(f"{stock_id} 基本面圖生成成功: {eps_chart}")
-    else:
-        print(f"{stock_id} 基本面圖生成失敗或查無資料")
+    gpt_report = stock_gpt_analysis(stock_id)
 
-    # 回傳文字訊息
-    messages = [TextMessage(text=f"{stock_id} 分析報告已生成")]
+    messages = [TextMessage(text=f"{stock_id} 分析報告:\n\n{gpt_report}")]
 
-    # 回傳圖表圖片
     for chart in [price_chart, eps_chart]:
         if chart:
             url = f"https://line-bot-flask-oha5.onrender.com/static/{os.path.basename(chart)}"
-            print(f"準備回傳圖片網址: {url}")
             messages.append(ImageMessage(original_content_url=url, preview_image_url=url))
 
-    # 推送訊息到 Line
-    try:
-        res = line_bot_api.push_message(user_id, messages)
-        print("訊息推送成功: ", res)
-    except Exception as e:
-        print(f"推送訊息失敗: {str(e)}")
-
+    line_bot_api.push_message(user_id, messages)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
-
-
